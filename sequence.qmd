@@ -1,0 +1,446 @@
+---
+title: "NMD"
+format: html
+---
+
+```{r}
+.libPaths('/scratch/prj/dn_hamidlab_msc_proj/Libraries/')
+library(tidyverse)
+library(Seurat)
+library(factR2)
+library(edgeR)
+#bsgenome
+library(rhdf5)
+library(tximportData)
+library(tximport)
+library(readr)
+library(biomaRt)
+library(DESeq2)
+library(PCAtools)
+library(EnhancedVolcano)
+library(pheatmap)
+library(limma)
+library(GenomicRanges)
+library(Biostrings)
+library(BSgenome)
+```
+
+```{r}
+fobj <- createfactRObject("../outputs/align/stringtie/stringtie_merged/custom_transcriptome.gtf", use_own_genome = "../originals/ref/GRCh38.p14.genome.fa", use_own_annotation = "../originals/ref/gencode.v49.chr_patch_hapl_scaff.annotation.gtf")
+
+head(fobj) #with default assay
+gns(fobj) #genes
+txs(fobj) #transcripts
+ase(fobj) #exon
+factR2::activeSet(fobj) <- "transcript"
+
+txs(fobj, "ANK3")
+
+plotTranscripts(fobj, "ANK3") #plot gene transcripts with plotly
+plotTranscripts(fobj, "ANK3", rescale_introns = T)
+
+fobj <- runfactR(fobj)
+```
+
+```{r}
+#saveRDS(fobj, "../outputs/factR2/fobj.rds")
+```
+
+```{r}
+fobj <- readRDS("../outputs/factR2/fobj.rds")
+```
+
+#DESeq2 DE
+##Path to kallisto
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples  <- list.files(kallisto)
+files <- file.path(kallisto, samples, "abundance.h5")
+names(files) <- samples
+```
+
+##load kallisto
+```{r}
+#Load in custom transcript
+transcript2gene <- fobj@transcriptome %>%
+  as.data.frame() %>%
+  filter(type == "transcript") %>%
+  dplyr::select(transcript_id, gene_id, gene_name) %>%
+  distinct()
+
+txi.kallisto.tsv <- tximport(files, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+gtf_path <- "../outputs/align/stringtie/stringtie_merged/custom_transcriptome.gtf"
+gtf <- rtracklayer::import(gtf_path) #GRanges object
+```
+
+```{r}
+metadata <- read.csv("../metadata/metadata.csv") %>% as.data.frame
+rownames(metadata) <- metadata$sample
+```
+
+```{r}
+metadata$kd_simple <- factor(metadata$kd_simple, c("ctrl", "CHX", "SMG1", "SMG6", "SMG6/7", "SMG7", "UPF1"))
+```
+
+#DESeq2 SMG
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples  <- list.files(kallisto)
+samples_smg6 <- unlist(read.table("../metadata/smg6.txt"))
+files_smg6 <- file.path(kallisto, samples_smg6, "abundance.h5")
+names(files_smg6) <- samples_smg6
+
+txi.kallisto.tsv.smg6 <- tximport(files_smg6, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+metadata_smg6 <- metadata[rownames(metadata) %in% samples_smg6,]
+metadata_smg6$kd_simple <- factor(metadata_smg6$kd_simple, c("ctrl", "SMG1", "SMG6", "SMG6/7", "SMG7"))
+
+data_smg6 <- DESeqDataSetFromTximport(txi = txi.kallisto.tsv.smg6, colData = metadata_smg6, design = ~ condition + study)
+
+dds_smg6 <- DESeq(data_smg6)
+#saveRDS(dds_smg6, "../outputs/deseq/dds_smg6.rds")
+```
+
+```{r}
+dds_smg6 <- readRDS("../outputs/deseq/dds_smg6.rds")
+res_smg6 <- results(dds_smg6)
+```
+
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples_smg7 <- unlist(read.table("../metadata/smg7.txt"))
+files_smg7 <- file.path(kallisto, samples_smg7, "abundance.h5")
+names(files_smg7) <- samples_smg7
+
+txi.kallisto.tsv.smg7 <- tximport(files_smg7, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+metadata_smg7 <- metadata[rownames(metadata) %in% samples_smg7,]
+
+data_smg7 <- DESeqDataSetFromTximport(txi = txi.kallisto.tsv.smg7, colData = metadata_smg7, design = ~ condition + study)
+
+dds_smg7 <- DESeq(data_smg7)
+#saveRDS(dds_smg7, "../outputs/deseq/dds_smg7.rds")
+```
+
+```{r}
+dds_smg7 <- readRDS("../outputs/deseq/dds_smg7.rds")
+res_smg7 <- results(dds_smg7)
+```
+
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples  <- list.files(kallisto)
+samples_smg1 <- unlist(read.table("../metadata/PRJNA1220709_accessionids.txt"))
+files_smg1 <- file.path(kallisto, samples_smg1, "abundance.h5")
+names(files_smg1) <- samples_smg1
+
+txi.kallisto.tsv.smg1 <- tximport(files_smg1, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+metadata_smg1 <- metadata[rownames(metadata) %in% samples_smg1,]
+
+data_smg1 <- DESeqDataSetFromTximport(txi = txi.kallisto.tsv.smg1, colData = metadata_smg1, design = ~ condition)
+
+dds_smg1 <- DESeq(data_smg1)
+
+#saveRDS(dds_smg1, "../outputs/deseq/dds_smg1.rds")
+```
+
+```{r}
+dds_smg1 <- readRDS("../outputs/deseq/dds_smg1.rds")
+res_smg1 <- results(dds_smg1) #(takes about 2mins to run)
+```
+
+#DESeq2 CHX
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples  <- list.files(kallisto)
+samples_chx <- samples[samples == c("SRR29478758", "SRR29478759", "SRR8443314","SRR8443315", "SRR8443318", "SRR8443319")]
+files_chx <- file.path(kallisto, samples_chx, "abundance.h5")
+names(files_chx) <- samples_chx
+
+txi.kallisto.tsv.chx <- tximport(files_chx, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+metadata_chx <- metadata[rownames(metadata) %in% samples_chx,]
+
+data_chx <- DESeqDataSetFromTximport(txi = txi.kallisto.tsv.chx, colData = metadata_chx, design = ~ condition + study)
+
+dds_chx <- DESeq(data_chx)
+
+#saveRDS(dds_chx, "../outputs/deseq/dds_chx.rds")
+```
+
+```{r}
+dds_chx <- readRDS("../outputs/deseq/dds_chx.rds")
+res_chx <- results(dds_chx)
+```
+
+#DESeq2 upf1
+```{r}
+kallisto <- "../outputs/align/kallisto/"
+samples  <- list.files(kallisto)
+samples_upf1 <- unlist(read.table("../metadata/upf1.txt"))
+files_upf1 <- file.path(kallisto, samples_upf1, "abundance.h5")
+names(files_upf1) <- samples_upf1
+
+txi.kallisto.tsv.upf1 <- tximport(files_upf1, type = "kallisto",tx2gene = transcript2gene, txOut=TRUE)
+
+metadata_upf1 <- metadata[rownames(metadata) %in% samples_upf1,]
+metadata_upf1$kd_simple <- factor(metadata_upf1$kd_simple, c("ctrl", "SMG1", "SMG6", "SMG6/7", "SMG7"))
+
+data_upf1 <- DESeqDataSetFromTximport(txi = txi.kallisto.tsv.upf1, colData = metadata_upf1, design = ~ condition + study)
+
+dds_upf1 <- DESeq(data_upf1)
+#saveRDS(dds_upf1, "../outputs/deseq/dds_upf1.rds")
+```
+
+```{r}
+dds_upf1 <- readRDS("../outputs/deseq/dds_upf1.rds")
+res_upf1 <- results(dds_upf1)
+```
+
+#FoldChange
+```{r}
+foldchange <- as.data.frame(cbind(res_chx["log2FoldChange"], res_smg1["log2FoldChange"], res_smg6["log2FoldChange"], res_smg7["log2FoldChange"], res_upf1["log2FoldChange"]))
+
+colnames(foldchange) <- c("chx_FC", "smg1_FC", "smg6_FC", "smg7_FC", "upf1_FC")
+#saveRDS(foldchange, "../outputs/nmd/combined_FC.RDS")
+```
+
+```{r}
+foldchange <- readRDS("../outputs/nmd/combined_FC.RDS")
+```
+
+##Heatmap by Gene
+```{r}
+heatmap_gene <- function(data, g){
+
+  x <- unique(transcript2gene %>% filter(transcript2gene$gene_name == g) %>% pull(transcript_id))
+  
+  data$transcript_id <- rownames(data)
+
+  data_sub <- data[data$transcript_id %in% x,]
+  
+  data_sub <- data_sub[, grepl("_FC", colnames(data_sub))]
+  
+  data_long <- data_sub %>%
+    rownames_to_column("transcript_id") %>%
+    pivot_longer(
+        cols = -transcript_id,
+        names_to = "condition",
+        values_to = "FC"
+    )
+
+  ggplot(data_long, aes(x = condition, y = transcript_id, fill = FC)) +
+  geom_tile() +
+    scale_fill_gradient2(low="red", mid = "white", high="blue") +
+    theme_minimal()
+}
+```
+
+```{r}
+heatmap_gene(foldchange, "PTBP1")
+```
+
+##Heatmap by NMD Gene
+```{r}
+nmd_heatmap <- function(data, g){
+
+  x <- unique(transcript2gene %>% filter(transcript2gene$gene_name == g ) %>% pull(transcript_id))
+  
+  data <-as.data.frame(data)
+  data$transcript_id <- rownames(data)
+
+  data_sub <- data[data$transcript_id %in% x,]
+  
+  data_sub$transcript_id <- rownames(data_sub)
+  
+  nmd <- txs(fobj, g)
+  
+  data_sub$nmd <- sapply(data_sub$transcript_id, function(x) {
+  gene_nmd <- nmd$nmd[nmd$transcript_id == x]
+  if (gene_nmd == "yes") "yes"
+  else if (gene_nmd == "no") "no"
+  else "na"
+})
+  
+  data_long <- data_sub %>%
+    pivot_longer(
+        cols = -c(transcript_id,nmd),
+        names_to = "condition",
+        values_to = "FC"
+    )
+
+  ggplot(data_long[data_long$nmd == "yes",], aes(x = condition, y = transcript_id, fill = FC)) +
+  geom_tile() +
+    scale_fill_gradient2(low="red", mid = "white", high="blue") +
+    theme_minimal()
+}
+```
+
+```{r}
+nmd_heatmap(foldchange, "PTBP1")
+```
+
+##Remove transcripts with 3 or more NAs
+```{r}
+foldchange_na <- foldchange[rowSums(is.na(foldchange)) <= 3, ]
+foldchange_na[is.na(foldchange_na)] <- 0
+lapply(foldchange_na, range)
+```
+
+##lmfit
+```{r}
+batch <- c(1,2,3,3,3)
+
+design <- model.matrix(~ batch)
+
+fit <- lmFit(foldchange_na, design)
+
+coefficients <- fit$coefficients
+
+#saveRDS(coefficients, "../outputs/nmd/coefficients.RDS")
+```
+
+```{r}
+nmd_heatmap(rmbe, "UPF1")
+nmd_heatmap(avg_FC, "UPF1")
+
+heatmap_gene(foldchange_na, "UPF1")
+nmd_heatmap(foldchange_na, "UPF1")
+```
+
+#Sequence
+```{r}
+gtf_path <- "../outputs/align/stringtie/stringtie_merged/custom_transcriptome.gtf"
+gtf <- rtracklayer::import(gtf_path) #GRanges object
+
+fobj <- readRDS("../outputs/factR2/fobj.rds")
+fasta.seq <- Biostrings::readDNAStringSet("../outputs/align/stringtie/stringtie_merged/custom_transcripts.fa")
+coefficients <- readRDS("../outputs/nmd/coefficients.RDS")
+```
+
+```{r}
+unique(fobj@transcriptome$type)
+
+txs(fobj)
+txs(fobj)$width - txs(fobj)$`3'UTR_length`
+
+sum(width(fobj@transcriptome[fobj@transcriptome$transcript_id=="ENST00000373020.9" & fobj@transcriptome$type=="exon"]))
+
+first_stop_coord_one <- makeGRangesFromDataFrame(data.frame(seqnames = txs(fobj)$transcript_id[1],
+           start = (txs(fobj)$width - txs(fobj)$`3'UTR_length`-4)[1],
+           end = (txs(fobj)$width - txs(fobj)$`3'UTR_length` -2)[1],
+           strand = "+"))
+
+seq <- makeGRangesFromDataFrame(data.frame(seqnames = txs(fobj)$transcript_id[3],
+           start = (txs(fobj)$width - txs(fobj)$`3'UTR_length`+1)[3],
+           end = (txs(fobj)$width - txs(fobj)$`3'UTR_length` + 3)[3],
+           strand = "+"))
+
+one <- getSeq(fasta.seq, first_stop_coord_one)
+
+one_seq <- getSeq(fasta.seq, seq)
+
+as.character(one)
+as.character(one_seq)
+```
+
+```{r}
+fobj_tid <- fobj
+
+fobj_tid@transcriptome <- fobj@transcriptome[fobj@transcriptome$transcript_id %in% rownames(coefficients)]
+```
+
+```{r}
+first_stop_coord <- makeGRangesFromDataFrame(data.frame(seqnames = txs(fobj_tid)$transcript_id,
+           start = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`+1),
+           end = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`+3),
+           strand = "+"), na.rm=TRUE)
+
+#remove transcripts 
+first_stop_coord$length <- lengths(fasta.seq[seqnames(first_stop_coord)])
+first_stop_coord[end(first_stop_coord) > first_stop_coord$length]
+first_stop_coord_rm <- first_stop_coord[!end(first_stop_coord) > first_stop_coord$length]
+
+getSeq(x = fasta.seq, names = first_stop_coord_rm)
+```
+
+###50 base window
+```{r}
+sequence <- makeGRangesFromDataFrame(data.frame(seqnames = txs(fobj_tid)$transcript_id,
+           start = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`-49),
+           end = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`+53),
+           strand = "+"), na.rm=TRUE)
+
+sequence$length <- lengths(fasta.seq[seqnames(sequence)])
+
+sequence_rm <- sequence[start(sequence) > 0 & end(sequence) <= sequence$length]
+
+transcript_seq <- getSeq(x = fasta.seq, names = sequence_rm)
+
+transcript_seq_ch <- as.character(transcript_seq)
+
+one_hot_list <- lapply(transcript_seq_ch, function(seq) {
+  bases <- strsplit(seq, "")[[1]]
+  matrix(as.integer(outer(bases, c("A", "C", "G", "T"), "==")), 
+         nrow = length(bases), ncol = 4)
+})
+
+#one_hot_list[1]
+```
+
+##order outputs
+```{r}
+coefficients <- as.data.frame(coefficients)
+
+seq_order <- as.character(seqnames(sequence_rm))
+
+for_seq <- coefficients[match(seq_order, rownames(coefficients)), ]
+
+for_seq <- for_seq[,1]
+
+#saveRDS(for_seq, "../outputs/nmd/for_seq.rds")
+```
+
+##100 base window
+```{r}
+sequence_1 <- makeGRangesFromDataFrame(data.frame(seqnames = txs(fobj_tid)$transcript_id,
+           start = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`-99),
+           end = (txs(fobj_tid)$width - txs(fobj_tid)$`3'UTR_length`+103),
+           strand = "+"), na.rm=TRUE)
+
+sequence_1$length <- lengths(fasta.seq[seqnames(sequence_1)])
+
+sequence_1_rm <- sequence_1[start(sequence_1) > 0 & end(sequence_1) <= sequence_1$length]
+
+transcript_seq_1 <- getSeq(x = fasta.seq, names = sequence_1_rm)
+
+transcript_seq_1_ch <- as.character(transcript_seq_1)
+
+one_hot_1_list <- lapply(transcript_seq_1_ch, function(seq) {
+  bases <- strsplit(seq, "")[[1]]
+  matrix(as.integer(outer(bases, c("A", "C", "G", "T"), "==")), 
+         nrow = length(bases), ncol = 4)
+})
+
+#one_hot_1_list[1]
+```
+
+##order outputs
+```{r}
+coefficients <- as.data.frame(coefficients)
+
+seq_order_1 <- as.character(seqnames(sequence_1_rm))
+
+for_seq_1 <- coefficients[match(seq_order_1, rownames(coefficients)), ]
+
+for_seq_1 <- for_seq_1[,1]
+
+#saveRDS(for_seq_1, "../outputs/nmd/for_seq_1.rds")
+```
+
+```{r}
+#saveRDS(one_hot_list, "../outputs/nmd/one_hot_list.rds")
+#saveRDS(one_hot_1_list, "../outputs/nmd/one_hot_1_list.rds")
+```
