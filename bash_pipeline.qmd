@@ -1,0 +1,275 @@
+---
+title: "nmd_pipeline"
+format: html
+---
+
+#Scripts
+Data was downloaded directly from SRA using fastq-dump from the sra-tools package. This was downloaded into the originals folder. This also included files that were paired end read and single end read.
+Fastq files from EBI were downloaded using wget
+
+#QC
+```{bash}
+module load fastqc
+module load py-multiqc/1.15-gcc-13.2.0-python-3.11.6
+
+fastqc -o ../outputs/fastqc -t 4 ../originals/og/*.fastq.gz
+
+multiqc ../../outputs/fastqc/og/ERR58805* -o ../../outputs/multiqc/og -n ERR58805
+multiqc ../../outputs/fastqc/og/SRR32268* -o ../../outputs/multiqc/og -n SRR322685
+multiqc ../../outputs/fastqc/og/SRR40812* -o ../../outputs/multiqc/og -n SRR40812
+multiqc ../../outputs/fastqc/og/SRR84433* -o ../../outputs/multiqc/og -n SRR84433
+```
+
+#Trimming
+Trimming was conducted to remove adapters and low quality reads
+```{bash}
+module load trimmomatic/0.39-gcc-13.2.0
+module load parallel
+
+parallel -j 4 -a PRJNA1220709_accessionids.txt java -jar /software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/bin/trimmomatic-0.39.jar PE -phred33 \
+../../originals/{}_1.fastq.gz ../../originals/{}_2.fastq.gz \
+../../outputs/trimmed/{}_1_paired.fastq.gz ../../outputs/trimmed/{}_1_unpaired.fastq.gz \
+../../outputs/trimmed/{}_2_paired.fastq.gz ../../outputs/trimmed/{}_2_unpaired.fastq.gz \
+ILLUMINACLIP:/software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/share/adapters/TruSeq3-PE.fa:2:30:10:2:True SLIDINGWINDOW:4:20 MINLEN:80
+
+parallel -j 4 -a PRJNA340370_accessionids.txt java -jar /software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/bin/trimmomatic-0.39.jar SE -phred33 \
+../../originals/{}_1.fastq.gz ../../outputs/trimmed/SE/{}_1_trimmed_fastq.gz \
+ILLUMINACLIP:/software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/share/adapters/TruSeq3-SE.fa:2:30:10:2:True SLIDINGWINDOW:4:20 MINLEN:80
+
+parallel -j 2 -a PRJNA1126174_accessionid.txt java -jar /software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/bin/trimmomatic-0.39.jar PE -phred33 \
+../../originals/{}_1.fastq.gz ../../originals/{}_2.fastq.gz \
+../../outputs/trimmed/{}_1_paired.fastq.gz ../../outputs/trimmed/{}_1_unpaired.fastq.gz \
+../../outputs/trimmed/{}_2_paired.fastq.gz ../../outputs/trimmed/{}_2_unpaired.fastq.gz \
+ILLUMINACLIP:/software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/trimmomatic-0.39-i5lbieeefpcxmue5vf4sfmh2p636cj27/share/adapters/TruSeq3-PE.fa:2:30:10:2:True SLIDINGWINDOW:4:20 MINLEN:80
+```
+
+#QC after trimming``
+```{bash}
+module load fastqc
+
+fastqc -o ../outputs/fastqc/trimmed -t 2 ../outputs/trimmed/*_paired.fastq.gz
+fastqc -o ../outputs/fastqc/trimmed -t 4 ../outputs/trimmed/SE/*fastq.gz
+
+module load py-multiqc/1.15-gcc-13.2.0-python-3.11.6
+
+multiqc ../outputs/fastqc/trimmed/SRR32268* -o ../outputs/multiqc/trimmed/ -n SRR32268
+multiqc ../outputs/fastqc/trimmed/SE/SRR40812* -o ../outputs/multiqc/trimmed/ -n SRR40812
+```
+
+#Alignment
+Single and paired end reads were aligned to the reference genome
+##Hisat
+Build index
+```{bash}
+module load hisat2
+hisat2-build -p 38 ../../originals/ref/GRCh38.p14.genome.fa ../../outputs/align/hisat/hisat_index
+
+hisat2_extract_exons.py ../../originals/ref/gencode.v48.basic.annotation.gtf > ../../outputs/align/hisat/genome_known_splice_sites.txt
+```
+
+For single ended reads
+```{bash}
+module load hisat2
+module load samtools
+
+hisat="../../outputs/align/hisat"
+fastq="../../outputs/trimmed"
+hisat_sam="../../outputs/align/hisat/hisat_sam"
+hisat_bam="../../outputs/align/hisat/hisat_bam"
+
+while read -r acc; do
+    q_1="$fastq/SE/${acc}_1_trimmed_fastq.gz"
+    bam="$hisat_bam/${acc}.bam"
+
+    hisat2 -p 40 --dta --known-splicesite-infile "$hisat/genome_known_splice_sites.txt" \
+        -x "$hisat/hisat_index" \
+        -U "$q_1" \
+        | samtools view -Su -@ 40 - \
+        | samtools sort -@ 40 -o "$bam"
+done < ../../metadata/PRJNA340370_accessionids.txt
+```
+
+For paired
+```{bash}
+hisat="../../outputs/align/hisat"
+fastq="../../outputs/trimmed"
+hisat_sam="../../outputs/align/hisat/hisat_sam"
+hisat_bam="../../outputs/align/hisat/hisat_bam"
+
+while read -r acc; do
+        q_1="$fastq/${acc}_1_paired.fastq.gz"
+        q_2="$fastq/${acc}_2_paired.fastq.gz"
+        sam="$hisat_sam/${acc}.sam"
+
+        hisat2 -p 40 --dta --known-splicesite-infile "$hisat/genome_known_splice_sites.txt" \
+                -x "$hisat/hisat_index" \
+                -1 "$q_1" -2 "$q_2" \
+                -S "$sam" --no-discordant
+done < ../../metadata/PRJNA1126174_accessionids.txt
+
+while read -r acc; do
+        q_1="$fastq/${acc}_1_paired.fastq.gz"
+        q_2="$fastq/${acc}_2_paired.fastq.gz"
+        sam="$hisat_sam/${acc}.sam"
+
+        hisat2 -p 40 --dta --known-splicesite-infile "$hisat/genome_known_splice_sites.txt" \
+                -x "$hisat/hisat_index" \
+                -1 "$q_1" -2 "$q_2" \
+                -S "$sam" --no-discordant
+done < ../../metadata/PRJNA1220709_accessionids.txt
+
+
+for filename in "$hisat_sam"/*.sam; do
+    file=${filename##*/}
+    file=${file%.sam}
+    samtools view -@ 40 -Su "$filename" | samtools sort -@ 40 -o "$hisat_bam"/$file.bam
+```
+
+For untrimmed files
+```{bash}
+module load hisat2
+module load samtools
+
+hisat="../../../outputs/align/hisat"
+fastq="../../../originals"
+hisat_sam="../../../outputs/align/hisat/hisat_sam"
+hisat_bam="../../../outputs/align/hisat/hisat_bam"
+
+while read -r acc; do
+    q_1="$fastq/${acc}_1.fastq.gz"
+    bam="$hisat_bam/${acc}.bam"
+
+    hisat2 -p 40 --dta --known-splicesite-infile "$hisat/genome_known_splice_sites.txt" \
+        -x "$hisat/hisat_index" \
+        -U "$q_1" \
+        | samtools view -Su -@ 40 - \
+        | samtools sort -@ 40 -o "$bam"
+done < ../../../metadata/PRJNA515197_accessionids.txt
+```
+
+##Isoquant
+```{bash}
+minimap2 -d ../../outputs/align/isoquant/GRCh38.mmi ../../originals/ref/GRCh38.p14.genome.fa
+
+isoquant.py \
+    -d nanopore \
+    --fastq ../../originals/ERR58805*.fastq.gz \
+    -r GRCh38.mmi \
+    --output ../../outputs/align/ \
+    --threads 16
+```
+
+##Stringtie
+for long read data
+```{bash}
+stringtie="/scratch/prj/dn_hamidlab_msc_proj/Libraries/stringtie-3.0.1.Linux_x86_64/stringtie"
+
+bam="../../../outputs/align/isoquant/OUT/aux"
+st_gtf="../../../outputs/align/stringtie"
+gtf="../../../originals/ref"
+
+for file in $bam/*.bam; do
+    newfile=${file##*/}
+    newfile=${newfile%.bam}
+    $stringtie "$file" -p 35 -o "$st_gtf/$newfile.gtf" -G "$gtf/gencode.v49.chr_patch_hapl_scaff.annotation.gtf"
+done
+```
+
+for short read data
+```{bash}
+stringtie="/scratch/prj/dn_hamidlab_msc_proj/Libraries/stringtie-3.0.1.Linux_x86_64/stringtie"
+
+bam="../../../outputs/align/hisat/hisat_bam"
+st_gtf="../../../outputs/align/stringtie"
+gtf="../../../originals/ref"
+
+for file in $bam/*.bam; do
+    newfile=${file##*/}
+    newfile=${newfile%.bam}
+    $stringtie "$file" -p 35 -o "$st_gtf/$newfile.gtf" -G "$gtf/gencode.v49.chr_patch_hapl_scaff.annotation.gtf"
+done
+```
+
+merge
+```{bash}
+stringtie="/scratch/prj/dn_hamidlab_msc_proj/Libraries/stringtie-3.0.1.Linux_x86_64/stringtie"
+
+st_gtf="../../../outputs/align/stringtie"
+gtf="../../../originals/ref"
+stringtie_merged="../../../outputs/align/stringtie/stringtie_merged"
+
+$stringtie --merge -G "$gtf/gencode.v49.chr_patch_hapl_scaff.annotation.gtf" $st_gtf/*.gtf \
+-o $stringtie_merged/custom_transcriptome.gtf
+```
+
+gffread
+```{bash}
+gffread="/scratch/prj/dn_hamidlab_msc_proj/Libraries/gffread-0.12.7.Linux_x86_64/gffread"
+
+gtf="../../../originals/ref"
+stringtie_merged="../../../outputs/align/stringtie/stringtie_merged"
+
+$gffread -w "$stringtie_merged/custom_transcripts.fa" -g "$gtf/GRCh38.p14.genome.fa" "$stringtie_merged/custom_transcriptome.gtf"
+```
+
+##Kallisto for quantification
+```{bash}
+module load hisat2
+module load samtools
+
+fastq="../../outputs/trimmed"
+kallisto="/scratch/prj/dn_hamidlab_msc_proj/Libraries/kallisto/kallisto"
+kallisto_dir="../../outputs/align/kallisto/"
+
+while read -r acc; do
+	q_1="$fastq/${acc}_1_paired.fastq.gz"
+	q_2="$fastq/${acc}_2_paired.fastq.gz"
+
+	$kallisto quant -i $kallisto_dir/../kallisto_index.idx \
+		-t 4 -o $kallisto_dir/${acc} \
+		"$q_1" "$q_2"
+done < ../../metadata/PRJNA1220709_accessionids.txt
+
+while read -r acc; do
+	q_1="$fastq/${acc}_1_paired.fastq.gz"
+	q_2="$fastq/${acc}_2_paired.fastq.gz"
+
+	$kallisto quant -i $kallisto_dir/../kallisto_index.idx \
+		-t 4 -o $kallisto_dir/${acc} \
+		"$q_1" "$q_2"
+done < ../../metadata/PRJNA1126174_accessionid.txt
+
+while read -r acc; do
+    q_1="$fastq/SE/${acc}_1_trimmed_fastq.gz"
+        $kallisto quant -i $kallisto_dir/../kallisto_index.idx \
+                -o $kallisto_dir/${acc} \
+                --single -t 4\
+                -l 200 \
+                -s 50 \
+                "$q_1"
+done < ../../metadata/PRJNA340370_accessionids.txt
+
+while read -r acc; do
+    q_1="../../originals/${acc}.fastq.gz"
+        $kallisto quant -i $kallisto_dir/../kallisto_index.idx \
+                -o $kallisto_dir/${acc} \
+                --single -t 4\
+                -l 200 \
+                -s 50 \
+                "$q_1"
+done < ../../metadata/PRJEB44747_accessionids.txt
+
+while read -r acc; do
+    q_1="../../originals/${acc}_1.fastq.gz"
+        $kallisto quant -i $kallisto_dir/../kallisto_index.idx \
+                -o $kallisto_dir/${acc} \
+                --single -t 4\
+                -l 200 \
+                -s 50 \
+                "$q_1"
+done < ../../metadata/PRJNA515197_accessionids.txt
+```
+
+
+
+
